@@ -1,0 +1,215 @@
+import express, { Request, Response, NextFunction } from 'express';
+// @ts-ignore — sql.js has no bundled types
+import initSqlJs from 'sql.js';
+import fs from 'fs';
+import path from 'path';
+
+type DayStats = {
+  steps?: number;
+  activeKcal?: number;
+  restingKcal?: number;
+  workoutCount?: number;
+  workoutMinutes?: number;
+  workoutNames?: string[];
+};
+
+async function main() {
+  // — load or create DB file —
+  const file = path.resolve('activity_data.sqlite');
+  let buffer = new Uint8Array();
+  if (fs.existsSync(file)) buffer = fs.readFileSync(file);
+
+  // — init sql.js —
+  const SQL = await initSqlJs({ locateFile: (f: any) => `node_modules/sql.js/dist/${f}` });
+  const db: any = new SQL.Database(buffer);
+
+  db.run(`
+    CREATE TABLE IF NOT EXISTS day_stats (
+      date TEXT PRIMARY KEY,
+      steps INTEGER,
+      activeKcal REAL,
+      restingKcal REAL,
+      workoutCount INTEGER,
+      workoutMinutes REAL,
+      workoutNames TEXT
+    );
+  `);
+
+  // — in-memory mirror —
+  const dayMap = new Map<string, DayStats>();
+  const res1 = db.exec("SELECT * FROM day_stats;");
+  if (res1.length) {
+    const { columns, values } = res1[0];
+    values.forEach((row: any[]) => {
+      const rec: any = {};
+      columns.forEach((col: string, i: number) => rec[col] = row[i]);
+      dayMap.set(rec.date, {
+        steps: rec.steps,
+        activeKcal: rec.activeKcal,
+        restingKcal: rec.restingKcal,
+        workoutCount: rec.workoutCount,
+        workoutMinutes: rec.workoutMinutes,
+        workoutNames: rec.workoutNames ? rec.workoutNames.split(',') : [],
+      });
+    });
+  }
+
+  // — helper to persist —
+  function saveDay(d: string, s: DayStats) {
+    const names = (s.workoutNames ?? []).join(',');
+    db.run(
+      `INSERT INTO day_stats
+         (date,steps,activeKcal,restingKcal,workoutCount,workoutMinutes,workoutNames)
+       VALUES (?,?,?,?,?,?,?)
+       ON CONFLICT(date) DO UPDATE SET
+         steps=excluded.steps,
+         activeKcal=excluded.activeKcal,
+         restingKcal=excluded.restingKcal,
+         workoutCount=excluded.workoutCount,
+         workoutMinutes=excluded.workoutMinutes,
+         workoutNames=excluded.workoutNames;`,
+      [d, s.steps||0, s.activeKcal||0, s.restingKcal||0,
+       s.workoutCount||0, s.workoutMinutes||0, names]
+    );
+    fs.writeFileSync(file, Buffer.from(db.export()));
+  }
+
+  // — Express setup —
+  const app = express();
+  app.use((req, _res, next: NextFunction) => {
+    console.log(`→ ${req.method} ${req.url}`);
+    next();
+  });
+  app.use(express.json({ limit: '100mb' }));
+
+  // — POST /steps —
+  app.post('/steps', (req: Request, res: Response): void => {
+    const metrics = req.body?.data?.metrics ?? [];
+    metrics.forEach((m: any) => {
+      const { name, units, data = [] } = m;
+      if (name === 'step_count') {
+        data.forEach((r: any) => {
+          const d = r.date.split(' ')[0];
+          const st = Math.round(r.qty);
+          const prev = dayMap.get(d) ?? {};
+          const upd = { ...prev, steps: st };
+          dayMap.set(d, upd);
+          saveDay(d, upd);
+          console.log(`[${d}] Steps: ${st}`);
+        });
+      }
+      if (name === 'active_energy') {
+        data.forEach((r: any) => {
+          const d = r.date.split(' ')[0];
+          const kcal = units === 'kJ' ? r.qty / 4.184 : r.qty;
+          const prev = dayMap.get(d) ?? {};
+          const upd = { ...prev, activeKcal: (prev.activeKcal||0) + kcal };
+          dayMap.set(d, upd);
+          saveDay(d, upd);
+        });
+      }
+      if (name === 'basal_energy_burned') {
+        data.forEach((r: any) => {
+          const d = r.date.split(' ')[0];
+          const kcal = units === 'kJ' ? r.qty / 4.184 : r.qty;
+          const prev = dayMap.get(d) ?? {};
+          const upd = { ...prev, restingKcal: (prev.restingKcal||0) + kcal };
+          dayMap.set(d, upd);
+          saveDay(d, upd);
+        });
+      }
+    });
+    res.sendStatus(200);
+  });
+
+  // — POST /workouts —
+  app.post('/workouts', (req: Request, res: Response): void => {
+    const workouts = req.body?.data?.workouts;
+    if (!Array.isArray(workouts)) {
+      res.status(400).send('Invalid workout data');
+      return;
+    }
+    workouts.forEach((w: any) => {
+      const d = w.start.split(' ')[0];
+      const mins = w.duration ? w.duration / 60 : 0;
+      const kcal = w.activeEnergyBurned?.qty
+        ? (w.activeEnergyBurned.units === 'kJ'
+            ? w.activeEnergyBurned.qty / 4.184
+            : w.activeEnergyBurned.qty)
+        : 0;
+      const prev = dayMap.get(d) ?? {};
+      const names = new Set(prev.workoutNames || []);
+      if (w.name) names.add(w.name);
+      const upd: DayStats = {
+        ...prev,
+        workoutCount:   (prev.workoutCount||0) + 1,
+        workoutMinutes: (prev.workoutMinutes||0) + mins,
+        activeKcal:     (prev.activeKcal||0) + kcal,
+        workoutNames:   [...names],
+      };
+      dayMap.set(d, upd);
+      saveDay(d, upd);
+      console.log(
+        `[${d}] Workout: ${w.name}, ${mins.toFixed(1)} min, ${kcal.toFixed(1)} kcal`
+      );
+    });
+    res.sendStatus(200);
+  });
+
+  // — GET / dashboard —
+  app.get('/', (_req, res) => {
+    const fmt = (d: string) => {
+      const [y, m, dd] = d.split('-');
+      return `${dd}-${m}-${y}`;
+    };
+    const rows = [...dayMap.keys()].sort().map(d => {
+      const s = dayMap.get(d)!;
+      const a = s.activeKcal || 0;
+      const r = s.restingKcal || 0;
+      const t = a + r;
+      return `<tr>
+        <td>${fmt(d)}</td>
+        <td>${s.steps||0}</td>
+        <td>${a.toFixed(0)}</td>
+        <td>${r.toFixed(0)}</td>
+        <td>${t.toFixed(0)}</td>
+        <td>${s.workoutCount||0}</td>
+        <td>${(s.workoutMinutes||0).toFixed(1)}</td>
+        <td>${(s.workoutNames||[]).join(', ')}</td>
+      </tr>`;
+    }).join('');
+
+    res.send(`
+      <!doctype html>
+      <html>
+        <head>
+          <title>Daily Activity Dashboard</title>
+          <style>
+            body { font-family: sans-serif; margin: 2rem; }
+            table { border-collapse: collapse; width: 95%; }
+            th, td { border: 1px solid #ccc; padding: 0.4rem; text-align: center; }
+            td:nth-child(8) { text-align: left; }
+          </style>
+        </head>
+        <body>
+          <h2>Daily Activity Dashboard</h2>
+          <table>
+            <tr>
+              <th>Date</th><th>Steps</th>
+              <th>Active&nbsp;kcal</th><th>Resting&nbsp;kcal</th><th>Total&nbsp;kcal</th>
+              <th># Workouts</th><th>Min</th><th>Workout Names</th>
+            </tr>
+            ${rows}
+          </table>
+        </body>
+      </html>
+    `);
+  });
+
+  app.listen(4000, () => console.log('listening on 4000'));
+}
+
+main().catch(err => {
+  console.error(err);
+  process.exit(1);
+});
