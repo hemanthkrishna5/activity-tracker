@@ -4,7 +4,9 @@
   "main": "index.js",
   "scripts": {
     "test": "echo \"Error: no test specified\" && exit 1",
-    "start": "ts-node src/index.ts"
+    "start"  : "ts-node src/index.ts",
+    "tunnel" : "ts-node src/tunnel.ts",
+    "dev"    : "concurrently --kill-others-on-fail \"pnpm start\" \"pnpm tunnel\""
   },
   "keywords": [],
   "author": "",
@@ -13,11 +15,16 @@
   "devDependencies": {
     "@types/express": "^5.0.3",
     "@types/node": "^24.0.4",
+    "@types/node-fetch": "^2.6.12",
+    "concurrently": "^9.2.0",
+    "node-fetch": "^3.3.2",
     "ts-node": "^10.9.2",
     "typescript": "^5.8.3"
   },
   "dependencies": {
     "@types/sqlite3": "^5.1.0",
+    "datatables.net": "^2.3.2",
+    "datatables.net-dt": "^2.3.2",
     "express": "^5.1.0",
     "sql.js": "^1.13.0"
   },
