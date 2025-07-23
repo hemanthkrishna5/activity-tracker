@@ -19,20 +19,19 @@ async function main() {
   let ip: string;
   try {
     ip = await fetchMyIP();
-    console.log(`🚪 Your IP address for tunnel-password: ${ip}`);
+    console.log(`🚪 Your IP address for tunnel‑password: ${ip}`);
   } catch (err) {
     console.error('⚠️  Could not fetch your public IP, skipping tunnel launch.', err);
     return;
   }
 
-  // spawn the localtunnel-auth process asynchronously:
+  // spawn the tunnel in the foreground (no detached/unref):
   const lt = spawn(
     'pnpm',
     ['dlx', 'localtunnel-auth', '--port', '4000', '--subdomain', 'activity', '--auth', ip],
     {
-      stdio: 'inherit',
       shell: true,
-      detached: true,
+      stdio: 'inherit',
     }
   );
 
@@ -42,14 +41,13 @@ async function main() {
 
   lt.on('exit', code => {
     if (code !== 0) {
-      console.error(`❌ Tunnel process exited with code ${code}. (check your network/firewall)`);
+      console.error(`❌ Tunnel process exited with code ${code}.`);
+      // No need to process.exit here—concurrently will shut down the server too.
     }
   });
-
-  // detach so that Ctrl-C in the parent will still kill both:
-  lt.unref();
 }
 
 main().catch(err => {
   console.error('❌ tunnel.ts failed:', err);
+  process.exit(1);
 });
