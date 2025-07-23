@@ -1,6 +1,6 @@
 // src/tunnel.ts
 import https from 'https';
-import { execSync } from 'child_process';
+import { spawn } from 'child_process';
 
 async function fetchMyIP(): Promise<string> {
   return new Promise((resolve, reject) => {
@@ -16,18 +16,40 @@ async function fetchMyIP(): Promise<string> {
 }
 
 async function main() {
+  let ip: string;
   try {
-    const ip = await fetchMyIP();
-    console.log(`🚪 Your IP address for tunnel‑password: ${ip}`);
-    // spawn localtunnel‑auth (loca.lt) with that IP as the password:
-    execSync(
-      `pnpm dlx localtunnel-auth --port 4000 --subdomain activity --auth "${ip}"`,
-      { stdio: 'inherit' }
-    );
+    ip = await fetchMyIP();
+    console.log(`🚪 Your IP address for tunnel-password: ${ip}`);
   } catch (err) {
-    console.error('❌ Failed to launch tunnel:', err);
-    process.exit(1);
+    console.error('⚠️  Could not fetch your public IP, skipping tunnel launch.', err);
+    return;
   }
+
+  // spawn the localtunnel-auth process asynchronously:
+  const lt = spawn(
+    'pnpm',
+    ['dlx', 'localtunnel-auth', '--port', '4000', '--subdomain', 'activity', '--auth', ip],
+    {
+      stdio: 'inherit',
+      shell: true,
+      detached: true,
+    }
+  );
+
+  lt.on('error', err => {
+    console.error('❌ Tunnel process failed to start:', err);
+  });
+
+  lt.on('exit', code => {
+    if (code !== 0) {
+      console.error(`❌ Tunnel process exited with code ${code}. (check your network/firewall)`);
+    }
+  });
+
+  // detach so that Ctrl-C in the parent will still kill both:
+  lt.unref();
 }
 
-main();
+main().catch(err => {
+  console.error('❌ tunnel.ts failed:', err);
+});
