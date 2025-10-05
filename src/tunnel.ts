@@ -22,32 +22,31 @@ async function main() {
     console.log(`🚪 Your IP address for tunnel‑password: ${ip}`);
   } catch (err) {
     console.error('⚠️  Could not fetch your public IP, skipping tunnel launch.', err);
+    // we still stay alive so dev script doesn't kill the server
+    process.stdin.resume();
     return;
   }
 
-  // spawn the tunnel in the foreground (no detached/unref):
+  // spawn the loca.lt tunnel in the foreground:
   const lt = spawn(
     'pnpm',
     ['dlx', 'localtunnel-auth', '--port', '4000', '--subdomain', 'activity', '--auth', ip],
-    {
-      shell: true,
-      stdio: 'inherit',
-    }
+    { shell: true, stdio: 'inherit' }
   );
 
   lt.on('error', err => {
     console.error('❌ Tunnel process failed to start:', err);
   });
-
   lt.on('exit', code => {
-    if (code !== 0) {
-      console.error(`❌ Tunnel process exited with code ${code}.`);
-      // No need to process.exit here—concurrently will shut down the server too.
-    }
+    console.error(`❌ Tunnel process exited with code ${code}. Will keep retrying on next dev restart.`);
+    // do NOT process.exit() — we just log it
   });
+
+  // keep this script alive even if the tunnel dies
+  process.stdin.resume();
 }
 
 main().catch(err => {
-  console.error('❌ tunnel.ts failed:', err);
-  process.exit(1);
+  console.error('❌ tunnel.ts uncaught error:', err);
+  process.stdin.resume();
 });

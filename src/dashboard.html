@@ -1,168 +1,205 @@
 <!doctype html>
 <html>
 <head>
-  <meta charset="utf-8">
+  <meta charset="utf-8" />
   <title>Activity Dashboard</title>
+
   <style>
-    body { font-family: sans-serif; margin:2rem; }
-    canvas { max-width:100%; height:auto; margin-bottom:2rem; }
-    table { border-collapse: collapse; width:100%; margin-top:2rem; }
-    th, td { border:1px solid #ccc; padding:0.4rem; text-align:center; }
-    th { cursor: pointer; background:#f6f6f6; }
-    th:hover { background:#eee; }
-    th.sorted.asc::after { content:" ▲"; }
-    th.sorted.desc::after { content:" ▼"; }
-    td:nth-child(8) { text-align:left; }
+    :root {
+      --bg: #0f1115;
+      --card: #151924;
+      --text: #eaeef7;
+      --muted: #a6b1c2;
+      --accent: #5aa6ff;
+      --accent2: #ff7b72;
+      --accent3: #4ac7a5;
+      --border: #2a3142;
+    }
+    html, body { background: var(--bg); color: var(--text); }
+    body { font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif; margin: 2rem; }
+    h1 { margin: 0 0 1rem; }
+    .subtle { color: var(--muted); margin: 0 0 2rem; }
+
+    .card {
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 16px;
+      margin-bottom: 20px;
+      box-shadow: 0 6px 24px rgba(0,0,0,.25);
+    }
+
+    canvas { max-width: 100%; height: 360px; }
+
+    /* DataTable overrides */
+    table.dataTable.table-dark { width: 100% !important; }
+    table.dataTable.table-dark thead th {
+      background: #1b2130; color: var(--text); border-bottom: 1px solid var(--border);
+    }
+    table.dataTable.table-dark tbody td {
+      color: var(--text); border-top: 1px solid var(--border);
+      background: var(--card);
+    }
+    table.dataTable.table-dark tbody tr:hover td {
+      background: #1a2030;
+    }
+    .dt-search input, .dt-length select {
+      background: #121622; color: var(--text); border: 1px solid var(--border);
+      border-radius: 8px; padding: 6px 10px;
+    }
+    .dt-paging .dt-paging-button {
+      background: #121622; color: var(--text); border: 1px solid var(--border);
+      padding: 6px 10px; margin: 0 2px; border-radius: 6px;
+    }
+    .dt-paging .dt-paging-button.current {
+      background: var(--accent); border-color: var(--accent); color: #041423;
+    }
   </style>
+
+  <!-- Chart.js -->
   <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+
+  <!-- DataTables (v2) -->
+  <link rel="stylesheet" href="https://cdn.datatables.net/2.0.8/css/dataTables.dataTables.min.css">
+  <script src="https://cdn.datatables.net/2.0.8/js/dataTables.min.js"></script>
 </head>
 <body>
   <h1>🏃‍♂️ Daily Activity Overview</h1>
-  <canvas id="stepsChart"></canvas>
-  <canvas id="kcalChart"></canvas>
-  <canvas id="monthChart"></canvas>
-  <h2>📊 Daily Data Table</h2>
-  <div id="tableContainer"></div>
+  <p class="subtle">“Total kcal” = Active kcal + 1745 (fixed baseline)</p>
 
-  <script>
-    let dailyData = [];
-    let currentSort = { idx: 0, asc: true };
+  <div class="card">
+    <canvas id="stepsChart"></canvas>
+  </div>
 
-    async function fetchData() {
-      dailyData = await fetch('/api/daily').then(r => r.json());
-      dailyData.forEach(r => r.date = new Date(r.date));
-      buildCharts();
-      buildTable(dailyData);
+  <div class="card">
+    <canvas id="kcalChart"></canvas>
+  </div>
+
+  <div class="card">
+    <table id="data" class="display table-dark" style="width:100%">
+      <thead>
+        <tr>
+          <th>Date</th>
+          <th>Steps</th>
+          <th>Active kcal</th>
+          <th>Total kcal</th>
+          <th># Workouts</th>
+          <th>Minutes</th>
+          <th>Workout Names</th>
+        </tr>
+      </thead>
+      <tbody></tbody>
+    </table>
+  </div>
+
+<script>
+async function getData(){
+  const res = await fetch('/api/daily', { credentials: 'same-origin' });
+  const data = await res.json();
+  return data;
+}
+
+function ddmmyyyy(iso){
+  const [y,m,d] = iso.split('-');
+  return `${d}-${m}-${y}`;
+}
+
+(async () => {
+  const data = await getData();
+
+  // --- Charts ---
+  const labels = data.map(r => ddmmyyyy(r.date));
+
+  // Steps line with a soft gradient
+  const stepsCtx = document.getElementById('stepsChart').getContext('2d');
+  const grad = stepsCtx.createLinearGradient(0, 0, 0, 300);
+  grad.addColorStop(0, 'rgba(90,166,255,0.35)');
+  grad.addColorStop(1, 'rgba(90,166,255,0.02)');
+
+  new Chart(stepsCtx, {
+    type: 'line',
+    data: {
+      labels,
+      datasets: [{
+        label: 'Steps',
+        data: data.map(r => r.steps || 0),
+        borderColor: '#5aa6ff',
+        backgroundColor: grad,
+        pointRadius: 0,
+        borderWidth: 2,
+        tension: 0.3,
+        fill: true
+      }]
+    },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      plugins: {
+        legend: { labels: { color: '#eaeef7' } },
+        title: { display: true, text: 'Daily Steps', color: '#eaeef7' },
+        tooltip: { mode: 'index', intersect: false }
+      },
+      scales: {
+        x: { ticks: { color: '#a6b1c2' }, grid: { color: 'rgba(255,255,255,0.05)' } },
+        y: { ticks: { color: '#a6b1c2' }, grid: { color: 'rgba(255,255,255,0.05)' } }
+      }
     }
+  });
 
-    function fmt(d) {
-      return d.toLocaleDateString('en-GB');
+  // kcal bars (Active + Total)
+  const kcalCtx = document.getElementById('kcalChart').getContext('2d');
+  new Chart(kcalCtx, {
+    type: 'bar',
+    data: {
+      labels,
+      datasets: [
+        { label: 'Active kcal', data: data.map(r => r.activeKcal || 0), backgroundColor: '#4ac7a5' },
+        { label: 'Total kcal',  data: data.map(r => r.totalKcal  || 0), backgroundColor: '#ff7b72' }
+      ]
+    },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      plugins: {
+        legend: { labels: { color: '#eaeef7' } },
+        title: { display: true, text: 'Daily kcal (Active vs Total)', color: '#eaeef7' },
+        tooltip: { mode: 'index', intersect: false }
+      },
+      scales: {
+        x: { stacked: false, ticks: { color: '#a6b1c2' }, grid: { color: 'rgba(255,255,255,0.05)' } },
+        y: { stacked: false, ticks: { color: '#a6b1c2' }, grid: { color: 'rgba(255,255,255,0.05)' } }
+      }
     }
+  });
 
-    function buildCharts() {
-      new Chart(document.getElementById('stepsChart'), {
-        type: 'line',
-        data: {
-          labels: dailyData.map(r => fmt(r.date)),
-          datasets: [{
-            label: 'Steps',
-            data: dailyData.map(r => r.steps),
-            borderColor: 'dodgerblue',
-            tension: 0.3,
-            fill: false
-          }]
-        },
-        options: {
-          responsive: true,
-          plugins: { title: { display: true, text: 'Daily Steps' } }
-        }
-      });
+  // --- Table (sortable/searchable via DataTables) ---
+  // Build rows with proper date sorting using data-order = ISO date
+  const tbody = document.querySelector('#data tbody');
+  tbody.innerHTML = data.map(r => `
+    <tr>
+      <td data-order="${r.date}">${ddmmyyyy(r.date)}</td>
+      <td>${r.steps ?? 0}</td>
+      <td>${(r.activeKcal ?? 0).toFixed(0)}</td>
+      <td>${(r.totalKcal  ?? 0).toFixed(0)}</td>
+      <td>${r.workoutCount ?? 0}</td>
+      <td>${(r.workoutMinutes ?? 0).toFixed(1)}</td>
+      <td>${(r.workoutNames ?? []).join(', ')}</td>
+    </tr>
+  `).join('');
 
-      new Chart(document.getElementById('kcalChart'), {
-        type: 'bar',
-        data: {
-          labels: dailyData.map(r => fmt(r.date)),
-          datasets: [
-            { label: 'Active', data: dailyData.map(r => r.activeKcal), backgroundColor: 'orange' },
-            { label: 'Resting (Fixed)', data: dailyData.map(_ => 1745), backgroundColor: 'seagreen' },
-            { label: 'Total', data: dailyData.map(r => r.totalKcal), backgroundColor: 'crimson' }
-          ]
-        },
-        options: {
-          responsive: true,
-          plugins: { title: { display: true, text: 'Daily kcal (stacked)' } },
-          scales: { x: { stacked: true }, y: { stacked: true } }
-        }
-      });
-
-      const mmap = {};
-      dailyData.forEach(r => {
-        const key = `${r.date.getFullYear()}-${String(r.date.getMonth() + 1).padStart(2, '0')}`;
-        mmap[key] = (mmap[key] || 0) + r.steps;
-      });
-      const months = Object.entries(mmap).sort();
-      new Chart(document.getElementById('monthChart'), {
-        type: 'bar',
-        data: {
-          labels: months.map(([m]) => m),
-          datasets: [{
-            label: 'Monthly Steps',
-            data: months.map(([, v]) => v),
-            backgroundColor: 'steelblue'
-          }]
-        },
-        options: {
-          responsive: true,
-          plugins: { title: { display: true, text: 'Monthly Steps' } }
-        }
-      });
+  // Initialize DataTables
+  new DataTable('#data', {
+    order: [[0, 'desc']],     // sort by Date (using data-order ISO) newest first
+    pageLength: 25,
+    lengthMenu: [10, 25, 50, 100],
+    layout: {
+      topStart: 'search',
+      topEnd: 'pageLength',
+      bottomStart: 'info',
+      bottomEnd: 'paging'
     }
-
-    function buildTable(data) {
-      const container = document.getElementById('tableContainer');
-      container.innerHTML = '';
-
-      const table = document.createElement('table');
-      const headers = ['Date', 'Steps', 'Active kcal', 'Resting kcal', 'Total kcal', '#Workouts', 'Minutes', 'Workout Names'];
-      const thead = document.createElement('thead');
-      const hrow = document.createElement('tr');
-
-      headers.forEach((h, i) => {
-        const th = document.createElement('th');
-        th.textContent = h;
-        th.addEventListener('click', () => sortBy(i, th));
-        hrow.appendChild(th);
-      });
-      thead.appendChild(hrow);
-      table.appendChild(thead);
-
-      const tbody = document.createElement('tbody');
-      data.forEach(r => {
-        const tr = document.createElement('tr');
-        [
-          fmt(r.date),
-          r.steps,
-          r.activeKcal.toFixed(0),
-          '1745',
-          r.totalKcal.toFixed(0),
-          r.workoutCount,
-          r.workoutMinutes.toFixed(1),
-          r.workoutNames.join(', ')
-        ].forEach(val => {
-          const td = document.createElement('td');
-          td.textContent = val;
-          tr.appendChild(td);
-        });
-        tbody.appendChild(tr);
-      });
-      table.appendChild(tbody);
-      container.appendChild(table);
-    }
-
-    function sortBy(idx, clickedTh) {
-      if (currentSort.idx === idx) currentSort.asc = !currentSort.asc;
-      else { currentSort.idx = idx; currentSort.asc = true; }
-      dailyData.sort((a, b) => {
-        let vA, vB;
-        switch (idx) {
-          case 0: vA = a.date; vB = b.date; break;
-          case 1: vA = a.steps; vB = b.steps; break;
-          case 2: vA = a.activeKcal; vB = b.activeKcal; break;
-          case 3: vA = 1745; vB = 1745; break;
-          case 4: vA = a.totalKcal; vB = b.totalKcal; break;
-          case 5: vA = a.workoutCount; vB = b.workoutCount; break;
-          case 6: vA = a.workoutMinutes; vB = b.workoutMinutes; break;
-          case 7: vA = a.workoutNames.join(','); vB = b.workoutNames.join(','); break;
-          default: vA = '', vB = '';
-        }
-        if (vA > vB) return currentSort.asc ? 1 : -1;
-        if (vA < vB) return currentSort.asc ? -1 : 1;
-        return 0;
-      });
-      buildTable(dailyData);
-    }
-
-    fetchData();
-  </script>
+  });
+})();
+</script>
 </body>
 </html>
